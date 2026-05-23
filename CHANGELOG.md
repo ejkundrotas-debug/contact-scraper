@@ -5,6 +5,35 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 проект следует [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.3.0] — 2026-05-23
+
+### Добавлено — Shop-logistics / Фулфилмент интеграция
+- **`LogisticsProfile`** (`modules/schemas.py`) — логистический подпрофиль лида:
+  - Категории товаров (одежда, косметика, БАД, электроника, БАД, хрупкое, опасные грузы...)
+  - Маркетплейсы (Wildberries, Ozon, Yandex.Market, KazanExpress, Lamoda...)
+  - Объём заказов в месяц (до_100 / 100_500 / 500_2000 / 2000_10000 / 10000_plus)
+  - Логистические флаги: свой склад, текущий фулфилмент, нужен ли холод/маркировка ЧЗ/обработка возвратов
+  - География (Москва / СПб / регионы РФ / СНГ / ЕС)
+  - **fulfillment_fit_score 0-10** — отдельный скоринг под фулфилмент-бизнес
+  - logistics_pain — болевая точка из текущей логистики
+- **`FULFILLMENT_PROMPT`** (`modules/prompts.py`) — специализированный prompt, заменяет combined в фулфилмент-режиме
+- **Фулфилмент-режим** (`modules/pipeline.py::_enrich_fulfillment`) — toggle в sidebar активирует logistics-extraction
+- **`ShopLogisticsCRM`** (`modules/crm.py`) — пятый CRM-провайдер, плоский payload специально под фулфилмент-CRM
+- **`lead_to_shop_logistics_payload()`** — конвертер LeadRecord → плоский JSON с логистическими полями верхнего уровня
+- **`storage.find_top_fulfillment_leads(min_fit=7)`** — приоритезация по fit_score
+- **UI обновления**:
+  - Sidebar toggle 🚚 «Фулфилмент-режим»
+  - В табе «Лиды» — expander «Топ-N логистических лидов» с CSV-экспортом
+  - В табе «Интеграции» — radio-кнопка «🚚 Топ-фулфилмент (fit_score≥7)» для CRM-пуша
+- **CSV-экспорт** теперь включает 5 новых колонок: «Лог.фит», «Категории товаров», «Маркетплейсы», «Объём заказов/мес», «Регионы»
+- **Env vars**: `SHOP_LOGISTICS_WEBHOOK_URL`, `SHOP_LOGISTICS_TOKEN`
+- **11 новых unit-тестов** для LogisticsProfile, ShopLogisticsCRM, payload, find_top — всего **25/25 проходят**
+
+### Изменено
+- Версия проекта: **1.2.0 → 1.3.0**
+- `CRM_PROVIDERS` теперь 5 провайдеров (добавлен `shop_logistics`)
+- `requirements.txt` без изменений — функционал работает на текущем стеке
+
 ## [1.2.0] — 2026-05-23
 
 ### Добавлено

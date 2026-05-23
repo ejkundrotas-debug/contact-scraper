@@ -357,3 +357,187 @@ def test_storage_find_top_fulfillment_leads(tmp_path):
     assert len(top_lower) == 2
     assert top_lower[0].enrichment.logistics.fulfillment_fit_score == 9  # сортировка
     assert top_lower[1].enrichment.logistics.fulfillment_fit_score == 5
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v1.3: LogisticsProfile + Shop-logistics CRM
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_logistics_profile_default():
+    """LogisticsProfile создаётся с дефолтами без падений."""
+    from modules.schemas import LogisticsProfile
+
+    log = LogisticsProfile()
+    assert log.fulfillment_fit_score == 0
+    assert log.monthly_orders_range == "не_определено"
+    assert log.product_categories == []
+    assert log.marketplaces == []
+    assert log.has_own_warehouse is None
+
+
+def test_logistics_profile_fields():
+    """Заполненный LogisticsProfile корректно валидирует литералы."""
+    from modules.schemas import LogisticsProfile
+
+    log = LogisticsProfile(
+        product_categories=["косметика", "БАД"],
+        marketplaces=["wildberries", "ozon"],
+        monthly_orders_range="100_500",
+        has_own_warehouse=False,
+        uses_fulfillment_now=True,
+        needs_marking=True,
+        primary_regions=["Москва", "регионы РФ"],
+        logistics_pain="возвраты с маркетплейсов отнимают много времени",
+        fulfillment_fit_score=8,
+        fit_reasoning="мультиканальный e-commerce с маркировкой ЧЗ",
+    )
+    assert log.fulfillment_fit_score == 8
+    assert "wildberries" in log.marketplaces
+    assert log.needs_marking is True
+
+
+def test_lead_record_with_logistics_profile():
+    """LeadRecord корректно встраивает LogisticsProfile в enrichment."""
+    from modules.schemas import AIEnrichment, LeadRecord, LogisticsProfile
+
+    log = LogisticsProfile(
+        product_categories=["одежда"],
+        marketplaces=["wildberries"],
+        monthly_orders_range="500_2000",
+        fulfillment_fit_score=9,
+    )
+    enr = AIEnrichment(
+        lead_tag="интернет-магазин",
+        score=85,
+        first_message="Добрый день",
+        logistics=log,
+    )
+    lead = LeadRecord(
+        company="ТестКомпани",
+        site="https://test-shop.ru",
+        enrichment=enr,
+    )
+    assert lead.enrichment.logistics is not None
+    assert lead.enrichment.logistics.fulfillment_fit_score == 9
+    assert "одежда" in lead.enrichment.logistics.product_categories
+
+
+def test_shop_logistics_payload_flat_structure():
+    """Shop-logistics payload — плоский, с логистическими полями верхнего уровня."""
+    from modules.crm import lead_to_shop_logistics_payload
+    from modules.schemas import AIEnrichment, LeadRecord, LogisticsProfile
+
+    log = LogisticsProfile(
+        product_categories=["косметика"],
+        marketplaces=["wildberries", "ozon"],
+        monthly_orders_range="2000_10000",
+        has_own_warehouse=False,
+        uses_fulfillment_now=True,
+        fulfillment_provider_current="старый_фф",
+        needs_marking=True,
+        primary_regions=["Москва"],
+        logistics_pain="дорого хранение",
+        fulfillment_fit_score=9,
+        fit_reasoning="идеальный профиль",
+    )
+    lead = LeadRecord(
+        company="ООО Косметика",
+        site="https://kosm.ru",
+        city="Москва",
+        inn="7707083893",
+        ogrn="1027700132195",
+        emails=["sales@kosm.ru", "info@kosm.ru"],
+        phones=["+74951234567"],
+        enrichment=AIEnrichment(score=88, first_message="Письмо", logistics=log),
+    )
+    payload = lead_to_shop_logistics_payload(lead)
+
+    # Плоская структура: все поля — на верхнем уровне
+    assert payload["company_name"] == "ООО Косметика"
+    assert payload["inn"] == "7707083893"
+    assert payload["primary_email"] == "sales@kosm.ru"
+    assert payload["primary_phone"] == "+74951234567"
+    assert payload["all_emails"] == "sales@kosm.ru; info@kosm.ru"
+    # Логистические поля
+    assert payload["fulfillment_fit_score"] == 9
+    assert payload["marketplaces"] == "wildberries, ozon"
+    assert payload["product_categories"] == "косметика"
+    assert payload["monthly_orders_range"] == "2000_10000"
+    assert payload["has_own_warehouse"] is False
+    assert payload["uses_fulfillment_now"] is True
+    assert payload["current_fulfillment_provider"] == "старый_фф"
+    assert payload["needs_marking_chestny_znak"] is True
+    assert payload["logistics_pain_point"] == "дорого хранение"
+    # Метаданные
+    assert payload["source"] == "lead_ai_scraper"
+
+
+def test_shop_logistics_payload_no_logistics_profile():
+    """Если logistics=None — payload всё равно валидный, поля пустые."""
+    from modules.crm import lead_to_shop_logistics_payload
+    from modules.schemas import LeadRecord
+
+    lead = LeadRecord(company="X", site="https://x.ru")
+    payload = lead_to_shop_logistics_payload(lead)
+    assert payload["fulfillment_fit_score"] is None
+    assert payload["marketplaces"] == ""
+    assert payload["product_categories"] == ""
+
+
+def test_shop_logistics_crm_not_configured():
+    """ShopLogisticsCRM без env — is_configured=False."""
+    from modules.crm import ShopLogisticsCRM
+
+    crm = ShopLogisticsCRM(webhook_url="")
+    assert crm.is_configured is False
+
+
+def test_shop_logistics_crm_in_registry():
+    """ShopLogisticsCRM зарегистрирован в CRM_PROVIDERS."""
+    from modules.crm import CRM_PROVIDERS, ShopLogisticsCRM
+
+    assert "shop_logistics" in CRM_PROVIDERS
+    assert CRM_PROVIDERS["shop_logistics"] is ShopLogisticsCRM
+
+
+def test_storage_find_top_fulfillment_leads():
+    """find_top_fulfillment_leads возвращает только лиды с fit_score ≥ min_fit."""
+    import os
+    import tempfile
+
+    from modules.schemas import AIEnrichment, LeadRecord, LogisticsProfile
+    from modules.storage import LeadStorage
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tf:
+        db_path = tf.name
+
+    try:
+        storage = LeadStorage(db_path=db_path)
+        # Лид с высоким fit
+        l1 = LeadRecord(
+            company="High Fit",
+            site="https://high.ru",
+            enrichment=AIEnrichment(
+                logistics=LogisticsProfile(fulfillment_fit_score=9, product_categories=["косметика"])
+            ),
+        )
+        # Лид с низким fit
+        l2 = LeadRecord(
+            company="Low Fit",
+            site="https://low.ru",
+            enrichment=AIEnrichment(
+                logistics=LogisticsProfile(fulfillment_fit_score=3)
+            ),
+        )
+        # Лид без логистики
+        l3 = LeadRecord(company="No Logistics", site="https://nolog.ru")
+        for l in (l1, l2, l3):
+            storage.upsert(l)
+
+        top = storage.find_top_fulfillment_leads(min_fit=7, limit=10)
+        sites = [l.site for l in top]
+        assert "https://high.ru" in sites
+        assert "https://low.ru" not in sites
+        assert "https://nolog.ru" not in sites
+    finally:
+        os.unlink(db_path)
