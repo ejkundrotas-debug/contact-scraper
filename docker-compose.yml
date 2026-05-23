@@ -3,16 +3,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: contact-scraper:1.2
     container_name: lead-ai-scraper
     restart: unless-stopped
+    # На проде слушаем только loopback — публикуем через Caddy/Nginx с TLS.
+    # В dev — поменяйте на "8501:8501" для прямого доступа.
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     env_file:
       - .env
     volumes:
-      # SQLite-база переживает рестарты
+      # SQLite-база и логи переживают рестарты
       - ./data:/app/data
-      # При желании монтируйте свои конфиги
+      # Конфиги монтируем read-only — можно править без пересборки образа
       - ./configs:/app/configs:ro
     networks:
       - scraper-net
@@ -20,28 +23,50 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:8501/_stcore/health"]
       interval: 30s
       timeout: 5s
+      start_period: 20s
       retries: 3
+    # Лимиты ресурсов — не дадим контейнеру съесть весь VPS
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    # Лог-ротация (без неё журналы могут забить диск)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Опциональный reverse proxy с TLS (раскомментируйте при необходимости)
-  # caddy:
-  #   image: caddy:2-alpine
-  #   restart: unless-stopped
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
-  #     - caddy-data:/data
-  #     - caddy-config:/config
-  #   networks:
-  #     - scraper-net
-  #   depends_on:
-  #     - scraper
+  # ─── Опциональный reverse proxy с автоматическим HTTPS ─────────────────
+  # Включить: переименуйте Caddyfile.example → Caddyfile, пропишите домен,
+  # затем: docker compose --profile proxy up -d
+  caddy:
+    image: caddy:2-alpine
+    container_name: lead-ai-caddy
+    restart: unless-stopped
+    profiles: ["proxy"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - scraper-net
+    depends_on:
+      scraper:
+        condition: service_healthy
 
 networks:
   scraper-net:
     driver: bridge
 
-# volumes:
-#   caddy-data:
-#   caddy-config:
+volumes:
+  caddy-data:
+  caddy-config:

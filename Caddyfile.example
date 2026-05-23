@@ -1,0 +1,57 @@
+# Caddyfile для Lead AI Contact Scraper
+# 
+# Использование:
+#   1. cp Caddyfile.example Caddyfile
+#   2. Замените scraper.example.com на ваш домен
+#   3. (Опционально) Замените basicauth логин/хэш — генерация:
+#        docker run --rm caddy:2-alpine caddy hash-password
+#   4. docker compose --profile proxy up -d
+#
+# Caddy автоматически получит и обновит Let's Encrypt сертификат.
+
+scraper.example.com {
+    # Streamlit требует WebSocket для интерактивных компонентов
+    reverse_proxy scraper:8501 {
+        # WebSocket-апгрейд
+        header_up Host {http.request.host}
+        header_up X-Real-IP {http.request.remote.host}
+    }
+
+    # HTTPS-only заголовки безопасности
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Streamlit подгружает inline-скрипты, поэтому 'unsafe-inline'
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' wss: https:;"
+    }
+
+    # Базовая HTTP-аутентификация (раскомментировать для защиты доступа)
+    # basicauth {
+    #     # Сгенерировать: docker run --rm caddy:2-alpine caddy hash-password
+    #     eugene $2a$14$REPLACE_WITH_BCRYPT_HASH
+    # }
+
+    # Лог-формат
+    log {
+        output file /data/access.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+        format json
+    }
+
+    # Rate limiting (нужен плагин — раскомментировать после установки)
+    # @api path /api/*
+    # rate_limit @api {
+    #     zone api {
+    #         events 30
+    #         window 1m
+    #     }
+    # }
+
+    # Запрещаем доступ к служебным эндпоинтам
+    @forbidden path /server/* /admin/*
+    respond @forbidden 403
+}
