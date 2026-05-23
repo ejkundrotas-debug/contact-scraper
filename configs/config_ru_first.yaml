@@ -1,0 +1,102 @@
+# RU-first mode for pilots where Russian providers must be primary.
+# GigaChat теперь использует auto-refresh: достаточно GIGACHAT_AUTH_KEY.
+providers:
+  - name: gigachat_primary
+    base_url: https://gigachat.devices.sberbank.ru/api/v1
+    model: GigaChat
+    api_format: gigachat
+    api_key_env: GIGACHAT_AUTH_KEY
+    capabilities: [extract, validate, okved, score, ru_content]
+    rpm: 10
+    rpd: 500
+    tpm: 12000
+    priority: 100
+    enabled: true
+    extras:
+      scope: GIGACHAT_API_PERS
+
+  - name: yandexgpt_primary
+    base_url: https://llm.api.cloud.yandex.net
+    model: yandexgpt-lite
+    api_format: yandex
+    api_key_env: YANDEXGPT_API_KEY
+    capabilities: [extract, validate, okved, score, ru_content]
+    rpm: 10
+    rpd: 500
+    tpm: 12000
+    priority: 95
+    enabled: false
+    extras:
+      folder_id: ""
+
+  - name: groq_8b_validate
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.1-8b-instant
+    api_format: openai
+    api_key_env: GROQ_API_KEY
+    capabilities: [validate, classify, prefilter]
+    rpm: 30
+    rpd: 14400
+    tpm: 6000
+    priority: 60
+    enabled: true
+
+  - name: groq_70b_extract
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.3-70b-versatile
+    api_format: openai
+    api_key_env: GROQ_API_KEY
+    capabilities: [extract, score]
+    rpm: 30
+    rpd: 1000
+    tpm: 12000
+    priority: 55
+    enabled: true
+
+  - name: openrouter_qwen_ru
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-235b-a22b:free
+    api_format: openai
+    api_key_env: OPENROUTER_API_KEY
+    capabilities: [extract, ru_content, okved]
+    rpm: 20
+    rpd: 1000
+    tpm: 12000
+    priority: 50
+    enabled: true
+
+  - name: openrouter_deepseek_extract
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-chat-v3:free
+    api_format: openai
+    api_key_env: OPENROUTER_API_KEY
+    capabilities: [extract, score]
+    rpm: 20
+    rpd: 1000
+    tpm: 12000
+    priority: 45
+    enabled: true
+
+  - name: deepseek_chat
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_format: openai
+    api_key_env: DEEPSEEK_API_KEY
+    capabilities: [extract, score, ru_content]
+    rpm: 60
+    rpd: 100000
+    tpm: 200000
+    priority: 42
+    enabled: true
+
+  - name: gemini_flash_okved
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-2.5-flash
+    api_format: openai
+    api_key_env: GEMINI_API_KEY
+    capabilities: [extract, classify, okved]
+    rpm: 15
+    rpd: 1500
+    tpm: 1000000
+    priority: 40
+    enabled: true

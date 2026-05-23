@@ -1,0 +1,28 @@
+capability_map:
+  validate:
+    - groq_8b_validate
+    - openrouter_nemotron_score
+    - gigachat_ru_fallback
+  extract:
+    - groq_70b_extract
+    - groq_scout_batch
+    - openrouter_deepseek_extract
+    - openrouter_qwen_ru
+    - gemini_flash_okved
+  extract_batch:
+    - groq_scout_batch
+  okved:
+    - gemini_flash_okved
+    - openrouter_qwen_ru
+    - gigachat_ru_fallback
+  score:
+    - groq_70b_extract
+    - openrouter_nemotron_score
+    - openrouter_deepseek_extract
+  ru_content:
+    - openrouter_qwen_ru
+    - gigachat_ru_fallback
+notes:
+  - Лимиты free-tier меняются. Проверяйте /models у провайдера перед большим запуском.
+  - Не используйте мультиаккаунты для обхода правил провайдера.
+  - В production добавьте персистентный usage-store вместо in-memory лимитов.

@@ -1,0 +1,47 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lead-ai-scraper
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # SQLite-база переживает рестарты
+      - ./data:/app/data
+      # При желании монтируйте свои конфиги
+      - ./configs:/app/configs:ro
+    networks:
+      - scraper-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Опциональный reverse proxy с TLS (раскомментируйте при необходимости)
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+  #     - caddy-config:/config
+  #   networks:
+  #     - scraper-net
+  #   depends_on:
+  #     - scraper
+
+networks:
+  scraper-net:
+    driver: bridge
+
+# volumes:
+#   caddy-data:
+#   caddy-config:

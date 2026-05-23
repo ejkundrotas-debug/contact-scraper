@@ -1,0 +1,248 @@
+# Foreign-first mode: maximum throughput with Groq/OpenRouter/Gemini + premium fallbacks.
+# API keys are read from .env. No multi-account limit bypass.
+#
+# api_format values:
+#   openai      — OpenAI-compatible chat/completions
+#   anthropic   — Claude messages API
+#   gemini-native — Google AI Studio v1beta generateContent
+#   yandex      — YandexGPT foundation models
+#   gigachat    — Sberbank GigaChat (auto-refresh via GIGACHAT_AUTH_KEY)
+providers:
+  # ─── Groq (fast & free) ──────────────────────────────────────────────
+  - name: groq_8b_validate
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.1-8b-instant
+    api_format: openai
+    api_key_env: GROQ_API_KEY
+    capabilities: [validate, classify, prefilter]
+    rpm: 30
+    rpd: 14400
+    tpm: 6000
+    priority: 95
+    enabled: true
+
+  - name: groq_70b_extract
+    base_url: https://api.groq.com/openai/v1
+    model: llama-3.3-70b-versatile
+    api_format: openai
+    api_key_env: GROQ_API_KEY
+    capabilities: [extract, score]
+    rpm: 30
+    rpd: 1000
+    tpm: 12000
+    priority: 90
+    enabled: true
+
+  - name: groq_scout_batch
+    base_url: https://api.groq.com/openai/v1
+    model: meta-llama/llama-4-scout-17b-16e-instruct
+    api_format: openai
+    api_key_env: GROQ_API_KEY
+    capabilities: [extract, extract_batch]
+    rpm: 30
+    rpd: 1000
+    tpm: 30000
+    priority: 80
+    enabled: true
+
+  # ─── OpenRouter (free models) ─────────────────────────────────────────
+  - name: openrouter_deepseek_extract
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-chat-v3:free
+    api_format: openai
+    api_key_env: OPENROUTER_API_KEY
+    capabilities: [extract, score, ru_content]
+    rpm: 20
+    rpd: 1000
+    tpm: 12000
+    priority: 70
+    enabled: true
+
+  - name: openrouter_qwen_ru
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-235b-a22b:free
+    api_format: openai
+    api_key_env: OPENROUTER_API_KEY
+    capabilities: [extract, ru_content, okved]
+    rpm: 20
+    rpd: 1000
+    tpm: 12000
+    priority: 65
+    enabled: true
+
+  - name: openrouter_nemotron_score
+    base_url: https://openrouter.ai/api/v1
+    model: nvidia/nemotron-nano-9b-v2:free
+    api_format: openai
+    api_key_env: OPENROUTER_API_KEY
+    capabilities: [score, validate]
+    rpm: 20
+    rpd: 1000
+    tpm: 8000
+    priority: 60
+    enabled: true
+
+  # ─── Gemini (OpenAI-compatible endpoint) ─────────────────────────────
+  - name: gemini_flash_okved
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-2.5-flash
+    api_format: openai
+    api_key_env: GEMINI_API_KEY
+    capabilities: [extract, classify, okved]
+    rpm: 15
+    rpd: 1500
+    tpm: 1000000
+    priority: 55
+    enabled: true
+
+  # ─── Gemini native (fallback при проблемах с OpenAI-bridge) ───────────
+  - name: gemini_native
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    model: gemini-2.5-flash
+    api_format: gemini-native
+    api_key_env: GEMINI_API_KEY
+    capabilities: [extract, classify, okved]
+    rpm: 15
+    rpd: 1500
+    tpm: 1000000
+    priority: 50
+    enabled: false
+
+  # ─── Anthropic Claude (paid, premium quality) ─────────────────────────
+  - name: anthropic_haiku
+    base_url: https://api.anthropic.com/v1
+    model: claude-3-5-haiku-latest
+    api_format: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    capabilities: [validate, classify, prefilter]
+    rpm: 50
+    rpd: 10000
+    tpm: 100000
+    priority: 50
+    enabled: true
+    extras:
+      anthropic_version: "2023-06-01"
+
+  - name: anthropic_sonnet
+    base_url: https://api.anthropic.com/v1
+    model: claude-3-5-sonnet-latest
+    api_format: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    capabilities: [extract, score, okved]
+    rpm: 50
+    rpd: 5000
+    tpm: 80000
+    priority: 75
+    enabled: true
+    extras:
+      anthropic_version: "2023-06-01"
+
+  # ─── OpenAI (paid) ────────────────────────────────────────────────────
+  - name: openai_4o_mini
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    api_format: openai
+    api_key_env: OPENAI_API_KEY
+    capabilities: [validate, classify, prefilter, score]
+    rpm: 60
+    rpd: 10000
+    tpm: 200000
+    priority: 55
+    enabled: true
+    extras:
+      supports_json_mode: true
+
+  - name: openai_4o
+    base_url: https://api.openai.com/v1
+    model: gpt-4o
+    api_format: openai
+    api_key_env: OPENAI_API_KEY
+    capabilities: [extract, okved, score]
+    rpm: 60
+    rpd: 5000
+    tpm: 80000
+    priority: 78
+    enabled: true
+    extras:
+      supports_json_mode: true
+
+  # ─── DeepSeek native (paid, очень дешёво) ─────────────────────────────
+  - name: deepseek_chat
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_format: openai
+    api_key_env: DEEPSEEK_API_KEY
+    capabilities: [extract, score, ru_content]
+    rpm: 60
+    rpd: 100000
+    tpm: 200000
+    priority: 68
+    enabled: true
+
+  # ─── Mistral La Plateforme ────────────────────────────────────────────
+  - name: mistral_small
+    base_url: https://api.mistral.ai/v1
+    model: mistral-small-latest
+    api_format: openai
+    api_key_env: MISTRAL_API_KEY
+    capabilities: [validate, extract, score]
+    rpm: 50
+    rpd: 10000
+    tpm: 100000
+    priority: 58
+    enabled: true
+
+  # ─── Together AI (open-source models, cheap) ──────────────────────────
+  - name: together_llama_70b
+    base_url: https://api.together.xyz/v1
+    model: meta-llama/Llama-3.3-70B-Instruct-Turbo
+    api_format: openai
+    api_key_env: TOGETHER_API_KEY
+    capabilities: [extract, score]
+    rpm: 60
+    rpd: 10000
+    tpm: 100000
+    priority: 62
+    enabled: true
+
+  # ─── xAI Grok ─────────────────────────────────────────────────────────
+  - name: xai_grok
+    base_url: https://api.x.ai/v1
+    model: grok-2-latest
+    api_format: openai
+    api_key_env: XAI_API_KEY
+    capabilities: [extract, score]
+    rpm: 30
+    rpd: 5000
+    tpm: 50000
+    priority: 45
+    enabled: true
+
+  # ─── Russian providers ────────────────────────────────────────────────
+  - name: gigachat_ru_fallback
+    base_url: https://gigachat.devices.sberbank.ru/api/v1
+    model: GigaChat
+    api_format: gigachat
+    api_key_env: GIGACHAT_AUTH_KEY   # если есть — используем auto-refresh
+    capabilities: [extract, validate, okved, score, ru_content]
+    rpm: 10
+    rpd: 500
+    tpm: 12000
+    priority: 35
+    enabled: true
+    extras:
+      scope: GIGACHAT_API_PERS
+
+  - name: yandexgpt_ru_fallback
+    base_url: https://llm.api.cloud.yandex.net
+    model: yandexgpt-lite
+    api_format: yandex
+    api_key_env: YANDEXGPT_API_KEY
+    capabilities: [extract, validate, okved, score, ru_content]
+    rpm: 10
+    rpd: 500
+    tpm: 12000
+    priority: 30
+    enabled: false
+    extras:
+      folder_id: ""   # переопределяется через YANDEX_FOLDER_ID env
