@@ -191,6 +191,66 @@ class ContactExtraction(BaseModel):
         return out
 
 
+# ─── Логистический профиль (для фулфилмент-бизнеса) ───────────────────────
+ProductCategory = Literal[
+    "одежда", "обувь", "косметика", "электроника", "БАД",
+    "продукты питания", "детские товары", "товары для дома",
+    "стройматериалы", "хрупкое (стекло/керамика)",
+    "крупногабаритное", "опасные грузы", "прочее", "не определено",
+]
+
+MarketplaceName = Literal[
+    "wildberries", "ozon", "yandex_market", "kazan_express", "mega_market",
+    "lamoda", "детский_мир", "собственный_сайт", "другое", "не_определено",
+]
+
+VolumeRange = Literal[
+    "до_100",      # отгрузок/мес
+    "100_500",
+    "500_2000",
+    "2000_10000",
+    "10000_plus",
+    "не_определено",
+]
+
+
+class LogisticsProfile(BaseModel):
+    """Профиль лида с точки зрения фулфилмент-оператора.
+
+    Заполняется LLM на основе текста сайта/описания компании.
+    Все поля опциональны — LLM ставит "не определено" если нет явных сигналов.
+    """
+
+    # Что и где продают
+    product_categories: list[ProductCategory] = Field(default_factory=list)
+    marketplaces: list[MarketplaceName] = Field(default_factory=list)
+    # Объём (в шт./мес. или в заказах/мес. — что нашёл LLM)
+    monthly_orders_range: VolumeRange = "не_определено"
+    # Текущая логистика
+    has_own_warehouse: bool | None = None
+    uses_fulfillment_now: bool | None = None
+    fulfillment_provider_current: str | None = None  # если упоминается конкретный
+    # География
+    primary_regions: list[str] = Field(default_factory=list)  # Москва, СПб, регионы РФ, СНГ, ЕС
+    needs_international: bool | None = None
+    # Особые требования
+    needs_cold_storage: bool | None = None  # холодильник
+    needs_marking: bool | None = None       # маркировка Честный знак
+    needs_returns_handling: bool | None = None
+    # Болевые точки и УТП специфично для логистики
+    logistics_pain: str = ""        # что не устраивает в текущей логистике
+    fulfillment_fit_score: int = Field(default=0, ge=0, le=10)  # 0-10, насколько подходит под наш фулфилмент
+    fit_reasoning: str = ""         # 1-2 фразы почему именно такой score
+
+    @field_validator("product_categories", "marketplaces", "primary_regions", mode="before")
+    @classmethod
+    def normalize_lists(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        return [str(v).strip() for v in values if str(v).strip()]
+
+
 class AIEnrichment(BaseModel):
     lead_tag: LeadTag = "не определено"
     decision_maker_role: str = ""
@@ -205,6 +265,9 @@ class AIEnrichment(BaseModel):
     reasoning_short: str = ""
     is_relevant: bool = True
     risks: list[str] = Field(default_factory=list)
+    # Логистический подпрофиль (опционально; заполняется при включённой
+    # фулфилмент-роли в pipeline)
+    logistics: LogisticsProfile | None = None
 
     @field_validator("risks", mode="before")
     @classmethod

@@ -101,7 +101,7 @@ def main() -> int:
         "ok": True,
         "providers": len(router.providers),
         "capabilities": sorted(REQUIRED_CAPABILITIES),
-        "version": "1.2.0",
+        "version": "1.3.0",
     }
     print(json.dumps(output, ensure_ascii=False))
     return 0

@@ -13,6 +13,7 @@ from .discovery import discover_leads
 from .prompts import (
     COMBINED_PROMPT,
     EXTRACT_PROMPT,
+    FULFILLMENT_PROMPT,
     OKVED_PROMPT,
     PREFILTER_PROMPT,
     SCORE_PROMPT,
@@ -20,7 +21,7 @@ from .prompts import (
     VALIDATE_CONTACT_PROMPT,
 )
 from .router import MultiProviderRouter
-from .schemas import AIEnrichment, LeadRecord, PipelineStats, SearchCandidate
+from .schemas import AIEnrichment, LeadRecord, LogisticsProfile, PipelineStats, SearchCandidate
 from .scraper import PublicScraper
 from .storage import LeadStorage
 
@@ -80,6 +81,7 @@ class LeadPipeline:
         dadata: DaDataClient | None = None,
         use_combined_prompt: bool = True,
         use_prefilter: bool = False,
+        fulfillment_mode: bool = False,
     ):
         self.router = router or MultiProviderRouter()
         self.scraper = scraper or PublicScraper()
@@ -87,6 +89,9 @@ class LeadPipeline:
         self.dadata = dadata or DaDataClient()
         self.use_combined_prompt = use_combined_prompt
         self.use_prefilter = use_prefilter
+        # Если True — используется FULFILLMENT_PROMPT вместо COMBINED_PROMPT.
+        # Заполняется логистический подпрофиль (lead.enrichment.logistics).
+        self.fulfillment_mode = fulfillment_mode
 
     async def discover(
         self,
@@ -170,7 +175,9 @@ class LeadPipeline:
             if not pre.get("error") and pre.get("has_contacts") is False:
                 lead.limitations.append(f"prefilter_skip: {pre.get('reason', '')[:120]}")
 
-        if self.use_combined_prompt:
+        if self.fulfillment_mode:
+            await self._enrich_fulfillment(lead, page_text)
+        elif self.use_combined_prompt:
             await self._enrich_combined(lead, page_text)
         else:
             await self._enrich_sequential(lead, contacts, page_text)
@@ -184,6 +191,72 @@ class LeadPipeline:
             lead.limitations.append(f"duplicate_by_{key}")
             lead.status = "needs_review"
         return lead
+
+    async def _enrich_fulfillment(self, lead: LeadRecord, page_text: str) -> None:
+        """Specialized prompt для фулфилмент-оператора.
+
+        Заполняет lead.enrichment.logistics (LogisticsProfile) + стандартные поля.
+        Один LLM-вызов (как combined), но с расширенной JSON-схемой.
+        """
+        prompt = FULFILLMENT_PROMPT.format(
+            company=lead.company,
+            site=lead.site,
+            city=lead.city,
+            niche=lead.niche,
+            note=lead.note,
+            text=page_text[:14000],
+        )
+        result = await self.router.call_json(
+            "extract",
+            prompt,
+            system=SYSTEM_SAFE_SCRAPER,
+            max_tokens=1800,  # больше места под logistics-объект
+        )
+        if result.get("error"):
+            lead.enrichment = self._fallback_enrichment(lead, result.get("details", "AI fulfillment extraction failed"))
+            lead.status = "needs_review"
+            return
+
+        # Validation block — точно так же как в combined
+        validation = result.get("validation") or {}
+        if isinstance(validation, dict):
+            is_company = validation.get("is_company_contact")
+            if is_company is False:
+                lead.emails, lead.phones, lead.telegram = [], [], []
+                lead.limitations.append("contacts_belong_to_third_party")
+            else:
+                ve = validation.get("valid_emails")
+                vp = validation.get("valid_phones")
+                vt = validation.get("valid_telegram")
+                if isinstance(ve, list):
+                    lead.emails = [e for e in lead.emails if e in ve]
+                if isinstance(vp, list):
+                    lead.phones = [p for p in lead.phones if p in vp]
+                if isinstance(vt, list):
+                    lead.telegram = [t for t in lead.telegram if t in vt]
+            lead.limitations.extend(validation.get("risks", []) or [])
+
+        # Enrichment block + extraction логистического подпрофиля
+        enrichment_payload = result.get("enrichment") or result
+        logistics_payload = None
+        if isinstance(enrichment_payload, dict):
+            logistics_payload = enrichment_payload.pop("logistics", None)
+
+        try:
+            allowed = {k: v for k, v in enrichment_payload.items() if k in AIEnrichment.model_fields and k != "logistics"}
+            lead.enrichment = AIEnrichment(**allowed)
+            # Парсим логистический подпрофиль отдельно — он не входит в combined-payload
+            if isinstance(logistics_payload, dict):
+                try:
+                    lead.enrichment.logistics = LogisticsProfile(
+                        **{k: v for k, v in logistics_payload.items() if k in LogisticsProfile.model_fields}
+                    )
+                except ValidationError as exc:
+                    lead.limitations.append(f"logistics_parse_error: {str(exc)[:160]}")
+            lead.status = "enriched"
+        except ValidationError as exc:
+            lead.enrichment = self._fallback_enrichment(lead, str(exc))
+            lead.status = "needs_review"
 
     async def _enrich_combined(self, lead: LeadRecord, page_text: str) -> None:
         """ОДИН LLM-вызов вместо трёх. capability='extract' (универсальная)."""

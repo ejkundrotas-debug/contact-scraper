@@ -19,7 +19,7 @@ from modules.storage import LeadStorage
 
 load_dotenv()
 
-st.set_page_config(page_title="Lead AI Scraper v1.2", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="Lead AI Scraper v1.3", layout="wide", page_icon="🎯")
 
 
 def run(coro):
@@ -44,6 +44,7 @@ def get_pipeline(
     use_combined_prompt: bool,
     use_prefilter: bool,
     use_dadata: bool,
+    fulfillment_mode: bool = False,
 ) -> LeadPipeline:
     router = get_router(config_path)
     scraper = PublicScraper(respect_robots=respect_robots, per_domain_delay_sec=per_domain_delay)
@@ -56,13 +57,14 @@ def get_pipeline(
         dadata=dadata,
         use_combined_prompt=use_combined_prompt,
         use_prefilter=use_prefilter,
+        fulfillment_mode=fulfillment_mode,
     )
 
 
 # ════════════════════════════════════════════════════════════════════════
 # Sidebar
 # ════════════════════════════════════════════════════════════════════════
-st.title("🎯 Lead AI Scraper v1.2")
+st.title("🎯 Lead AI Scraper v1.3")
 st.caption(
     "Поиск B2B-лидов, парсинг открытых контактов, AI-обогащение и черновики сообщений. "
     "Без авторассылки и обхода защит. Compliance-first."
@@ -98,6 +100,19 @@ with st.sidebar:
         value=bool(os.getenv("DADATA_API_KEY")),
         help="Требует DADATA_API_KEY в .env",
     )
+    fulfillment_mode = st.toggle(
+        "🚚 Фулфилмент-режим (Shop-logistics)",
+        value=False,
+        help=(
+            "Использует специализированный prompt для фулфилмент-оператора. "
+            "Заполняет логистический подпрофиль: маркетплейсы, объёмы заказов, "
+            "категории товаров, регионы, требования (холод/маркировка ЧЗ). "
+            "Скоринг подходящих лидов 0-10 (fulfillment_fit_score). "
+            "Несовместим с обычным combined-prompt — переопределяет его."
+        ),
+    )
+    if fulfillment_mode:
+        st.info("🚚 Активен фулфилмент-режим — извлекаем логистический профиль")
 
     st.divider()
     st.caption("Минимальный AI-ключ:")
@@ -105,7 +120,8 @@ with st.sidebar:
     st.caption("Ключи задаются в .env, не в интерфейсе.")
 
 pipeline = get_pipeline(
-    config_path, db_path, respect_robots, per_domain_delay, use_combined_prompt, use_prefilter, use_dadata
+    config_path, db_path, respect_robots, per_domain_delay,
+    use_combined_prompt, use_prefilter, use_dadata, fulfillment_mode,
 )
 storage = get_storage(db_path)
 
@@ -255,6 +271,33 @@ with tab_leads:
         # Сохраняем отфильтрованные id для интеграций
         st.session_state["filtered_lead_sites"] = df_filtered["Сайт"].tolist()
         st.caption("Рассылку делайте вручную после проверки 50-100 лидов. Автоотправки в MVP нет.")
+
+        # Топ-фулфилмент-лиды (только если есть лиды с логистическим профилем)
+        top_log = storage.find_top_fulfillment_leads(min_fit=7, limit=50)
+        if top_log:
+            with st.expander(f"🚚 Топ-{len(top_log)} логистических лидов (fit_score ≥ 7)", expanded=False):
+                top_rows = []
+                for lead in top_log:
+                    log = lead.enrichment.logistics
+                    top_rows.append({
+                        "Компания": lead.company,
+                        "Сайт": lead.site,
+                        "Fit": log.fulfillment_fit_score,
+                        "Категории": ", ".join(log.product_categories),
+                        "Маркетплейсы": ", ".join(log.marketplaces),
+                        "Объём/мес": log.monthly_orders_range,
+                        "Регионы": ", ".join(log.primary_regions),
+                        "Боль": log.logistics_pain[:80],
+                        "Email": lead.emails[0] if lead.emails else "",
+                    })
+                st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
+                top_csv = pd.DataFrame(top_rows).to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "⬇️ Топ-логистика CSV", data=top_csv,
+                    file_name=f"top_fulfillment_{len(top_log)}.csv", mime="text/csv",
+                )
+                # Сохраняем для интеграций
+                st.session_state["top_fulfillment_sites"] = [l.site for l in top_log]
     else:
         st.info("Пока лидов нет. Перейдите на вкладку 1 или 2.")
 
@@ -359,7 +402,12 @@ with tab_integrations:
         crm_choice = st.selectbox("CRM для экспорта", list(configured_crms.keys()))
         filter_choice = st.radio(
             "Что отправлять",
-            ["Только отфильтрованные с вкладки 'Лиды'", "Все лиды", "Только draft_ready"],
+            [
+                "Только отфильтрованные с вкладки 'Лиды'",
+                "Все лиды",
+                "Только draft_ready",
+                "🚚 Топ-фулфилмент (fit_score≥7)",
+            ],
             horizontal=True,
         )
         if st.button(f"📤 Отправить в {crm_choice}", type="primary"):
@@ -369,6 +417,8 @@ with tab_integrations:
                 target = [l for l in all_leads if l.site in sites]
             elif filter_choice == "Только draft_ready":
                 target = [l for l in all_leads if l.status == "draft_ready"]
+            elif filter_choice.startswith("🚚"):
+                target = storage.find_top_fulfillment_leads(min_fit=7, limit=500)
             else:
                 target = all_leads
             crm = configured_crms[crm_choice]
@@ -388,7 +438,8 @@ with tab_integrations:
     else:
         st.info(
             "⚪ Ни одна CRM не сконфигурирована. Доступные интеграции:\n"
-            "- **Generic webhook** (`CRM_WEBHOOK_URL`) — для Shop-logistics fulfillment, n8n, Make, Zapier\n"
+            "- **Generic webhook** (`CRM_WEBHOOK_URL`) — для n8n, Make, Zapier\n"
+            "- **Shop-logistics / Fulfillment** (`SHOP_LOGISTICS_WEBHOOK_URL`) — плоский payload с логистическим профилем\n"
             "- **Bitrix24** (`BITRIX24_WEBHOOK_URL`)\n"
             "- **amoCRM** (`AMOCRM_SUBDOMAIN` + `AMOCRM_ACCESS_TOKEN`)\n"
             "- **HubSpot** (`HUBSPOT_ACCESS_TOKEN`)"

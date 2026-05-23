@@ -32,6 +32,11 @@ CSV_COLUMNS = [
     "Первое сообщение",
     "Приоритет",
     "Скоринг",
+    "Лог.фит (0-10)",
+    "Категории товаров",
+    "Маркетплейсы",
+    "Объём заказов/мес",
+    "Регионы",
     "Источник",
     "Дата сбора",
     "Ограничения",
@@ -300,9 +305,29 @@ class LeadStorage:
                     "Первое сообщение": lead.enrichment.first_message,
                     "Приоритет": lead.enrichment.priority,
                     "Скоринг": lead.enrichment.score,
+                    "Лог.фит (0-10)": (lead.enrichment.logistics.fulfillment_fit_score if lead.enrichment.logistics else ""),
+                    "Категории товаров": ("; ".join(lead.enrichment.logistics.product_categories) if lead.enrichment.logistics else ""),
+                    "Маркетплейсы": ("; ".join(lead.enrichment.logistics.marketplaces) if lead.enrichment.logistics else ""),
+                    "Объём заказов/мес": (lead.enrichment.logistics.monthly_orders_range if lead.enrichment.logistics else ""),
+                    "Регионы": ("; ".join(lead.enrichment.logistics.primary_regions) if lead.enrichment.logistics else ""),
                     "Источник": lead.source_url or lead.site,
                     "Дата сбора": lead.collected_at,
                     "Ограничения": "; ".join(lead.limitations),
                 }
             )
         return rows
+
+    def find_top_fulfillment_leads(self, min_fit: int = 7, limit: int = 100) -> list[LeadRecord]:
+        """Возвращает лиды с высоким fulfillment_fit_score (для приоритезации
+        логистических сейлзов).
+        Работает на любом SQLite (с JSON1 и без) — фильтрация делается в Python.
+        """
+        leads = self.list_leads(limit=1000)
+        out = []
+        for lead in leads:
+            if lead.enrichment.logistics and lead.enrichment.logistics.fulfillment_fit_score >= min_fit:
+                out.append(lead)
+            if len(out) >= limit:
+                break
+        out.sort(key=lambda x: -(x.enrichment.logistics.fulfillment_fit_score if x.enrichment.logistics else 0))
+        return out

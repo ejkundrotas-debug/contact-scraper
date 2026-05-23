@@ -212,3 +212,148 @@ async def test_pipeline_combined_fallback(monkeypatch, tmp_path):
     # Без LLM — статус needs_review, но fallback_enrichment всё равно даёт first_message
     assert lead.status in {"needs_review", "draft_ready"}
     assert "fallback_enrichment" in lead.enrichment.risks
+
+
+# ── v1.3: Logistics profile (Shop-logistics integration) ────────────────
+def test_logistics_profile_default():
+    """LogisticsProfile создаётся с пустыми дефолтами и валидным fit_score."""
+    from modules.schemas import LogisticsProfile
+
+    log = LogisticsProfile()
+    assert log.fulfillment_fit_score == 0
+    assert log.product_categories == []
+    assert log.marketplaces == []
+    assert log.monthly_orders_range == "не_определено"
+    assert log.has_own_warehouse is None
+
+
+def test_logistics_profile_from_llm_payload():
+    """Парсим типичный JSON-ответ от LLM в фулфилмент-режиме."""
+    from modules.schemas import LogisticsProfile
+
+    payload = {
+        "product_categories": ["косметика", "БАД"],
+        "marketplaces": ["wildberries", "ozon"],
+        "monthly_orders_range": "500_2000",
+        "has_own_warehouse": False,
+        "uses_fulfillment_now": True,
+        "fulfillment_provider_current": "FBO Wildberries",
+        "primary_regions": ["Москва", "регионы РФ"],
+        "needs_marking": True,
+        "fulfillment_fit_score": 9,
+        "fit_reasoning": "идеальный e-commerce-клиент с маркетплейсами",
+    }
+    log = LogisticsProfile(**payload)
+    assert log.fulfillment_fit_score == 9
+    assert "косметика" in log.product_categories
+    assert "wildberries" in log.marketplaces
+    assert log.uses_fulfillment_now is True
+    assert log.needs_marking is True
+
+
+def test_logistics_fit_score_clamped():
+    """fit_score должен быть в диапазоне 0-10 (Pydantic Field ge/le)."""
+    from pydantic import ValidationError
+
+    from modules.schemas import LogisticsProfile
+
+    with pytest.raises(ValidationError):
+        LogisticsProfile(fulfillment_fit_score=15)
+    with pytest.raises(ValidationError):
+        LogisticsProfile(fulfillment_fit_score=-1)
+
+
+def test_lead_to_shop_logistics_payload():
+    """Плоский payload для Shop-logistics CRM — без вложенностей."""
+    from modules.crm import lead_to_shop_logistics_payload
+    from modules.schemas import AIEnrichment, LeadRecord, LogisticsProfile
+
+    lead = LeadRecord(
+        company="Тестовый магазин",
+        site="https://test-shop.ru",
+        city="Москва",
+        inn="7707083893",
+        emails=["sales@test-shop.ru"],
+        phones=["+79991234567"],
+        enrichment=AIEnrichment(
+            score=85,
+            priority="high",
+            first_message="Тестовое сообщение",
+            best_channel="email",
+            logistics=LogisticsProfile(
+                product_categories=["косметика"],
+                marketplaces=["wildberries", "собственный_сайт"],
+                monthly_orders_range="500_2000",
+                fulfillment_fit_score=8,
+                needs_marking=True,
+                primary_regions=["Москва", "регионы РФ"],
+            ),
+        ),
+    )
+    payload = lead_to_shop_logistics_payload(lead)
+    # Плоская структура — не должно быть вложенных dict
+    assert payload["company_name"] == "Тестовый магазин"
+    assert payload["primary_email"] == "sales@test-shop.ru"
+    assert payload["primary_phone"] == "+79991234567"
+    assert payload["fulfillment_fit_score"] == 8
+    assert "косметика" in payload["product_categories"]
+    assert "wildberries" in payload["marketplaces"]
+    assert payload["needs_marking_chestny_znak"] is True
+    assert payload["general_score"] == 85
+    # Не должно быть вложенных объектов
+    for value in payload.values():
+        assert not isinstance(value, dict), f"flat-payload required, got dict: {value}"
+
+
+def test_shop_logistics_crm_not_configured():
+    """ShopLogisticsCRM возвращает not_configured если нет webhook URL."""
+    import os
+
+    from modules.crm import ShopLogisticsCRM
+
+    # Гарантируем отсутствие env
+    os.environ.pop("SHOP_LOGISTICS_WEBHOOK_URL", None)
+    crm = ShopLogisticsCRM()
+    assert crm.is_configured is False
+
+
+def test_storage_find_top_fulfillment_leads(tmp_path):
+    """find_top_fulfillment_leads возвращает только лиды с fit_score >= min_fit."""
+    from modules.schemas import AIEnrichment, LeadRecord, LogisticsProfile
+    from modules.storage import LeadStorage
+
+    storage = LeadStorage(db_path=str(tmp_path / "test_fulfillment.sqlite3"))
+
+    # Лид с fit_score=9 (топ)
+    high = LeadRecord(
+        company="Хороший магазин",
+        site="https://high.ru",
+        enrichment=AIEnrichment(
+            logistics=LogisticsProfile(fulfillment_fit_score=9, product_categories=["одежда"])
+        ),
+    )
+    # Лид с fit_score=5 (средний)
+    mid = LeadRecord(
+        company="Средний магазин",
+        site="https://mid.ru",
+        enrichment=AIEnrichment(
+            logistics=LogisticsProfile(fulfillment_fit_score=5)
+        ),
+    )
+    # Лид без логистического профиля
+    no_log = LeadRecord(company="Без профиля", site="https://no-log.ru")
+
+    storage.upsert(high)
+    storage.upsert(mid)
+    storage.upsert(no_log)
+
+    top = storage.find_top_fulfillment_leads(min_fit=7)
+    assert len(top) == 1
+    assert top[0].company == "Хороший магазин"
+    assert top[0].enrichment.logistics.fulfillment_fit_score == 9
+
+    # Снижаем порог — попадают оба с профилем
+    top_lower = storage.find_top_fulfillment_leads(min_fit=5)
+    assert len(top_lower) == 2
+    assert top_lower[0].enrichment.logistics.fulfillment_fit_score == 9  # сортировка
+    assert top_lower[1].enrichment.logistics.fulfillment_fit_score == 5
